@@ -2,22 +2,65 @@ provider "aws" {
   region = "us-west-2"
 }
 
-# Create an S3 bucket
-resource "aws_s3_bucket" "example_bucket" {
-  bucket = "my-unique-s3-bucket-name-terraform"
-  acl    = "private"
+# -------------------------------------
+# VPC and Networking Components
+# -------------------------------------
+
+# Create a VPC
+resource "aws_vpc" "example_vpc" {
+  cidr_block = "10.0.0.0/16"
+  tags = {
+    Name = "example-vpc"
+  }
 }
 
-# Create an EBS volume
-resource "aws_ebs_volume" "example_ebs" {
+# Create a public subnet
+resource "aws_subnet" "example_subnet" {
+  vpc_id            = aws_vpc.example_vpc.id
+  cidr_block        = "10.0.1.0/24"
   availability_zone = "us-west-2a"
-  size              = 10
+  tags = {
+    Name = "example-subnet"
+  }
 }
+
+# Create an Internet Gateway
+resource "aws_internet_gateway" "example_igw" {
+  vpc_id = aws_vpc.example_vpc.id
+  tags = {
+    Name = "example-igw"
+  }
+}
+
+# Create a route table
+resource "aws_route_table" "example_route_table" {
+  vpc_id = aws_vpc.example_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.example_igw.id
+  }
+
+  tags = {
+    Name = "example-route-table"
+  }
+}
+
+# Associate the route table with the subnet
+resource "aws_route_table_association" "example_route_table_assoc" {
+  subnet_id      = aws_subnet.example_subnet.id
+  route_table_id = aws_route_table.example_route_table.id
+}
+
+# -------------------------------------
+# EC2 Instance
+# -------------------------------------
 
 # Create a security group for the EC2 instance
-resource "aws_security_group" "example_sg" {
-  name_prefix = "example-sg-"
-  
+resource "aws_security_group" "ec2_sg" {
+  vpc_id = aws_vpc.example_vpc.id
+  name   = "ec2-sg"
+
   ingress {
     from_port   = 22
     to_port     = 22
@@ -31,60 +74,57 @@ resource "aws_security_group" "example_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "ec2-sg"
+  }
 }
 
 # Create an EC2 instance
 resource "aws_instance" "example_ec2" {
-  ami           = "ami-0c55b159cbfafe1f0" # Amazon Linux 2 AMI
+  ami           = "ami-0c55b159cbfafe1f0"  # Amazon Linux 2 AMI
   instance_type = "t2.micro"
-  key_name      = "my-key-pair"
-
-  vpc_security_group_ids = [aws_security_group.example_sg.id]
-
-  root_block_device {
-    volume_size = 8
-  }
+  subnet_id     = aws_subnet.example_subnet.id
+  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
 
   tags = {
     Name = "example-ec2-instance"
   }
 }
 
-# Attach the EBS volume to the EC2 instance
-resource "aws_volume_attachment" "ebs_attachment" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.example_ebs.id
-  instance_id = aws_instance.example_ec2.id
+# -------------------------------------
+# Elastic Beanstalk
+# -------------------------------------
+
+# Create an Elastic Beanstalk application
+resource "aws_elastic_beanstalk_application" "example_app" {
+  name = "example-app"
 }
 
-# Create an IAM role for the Lambda function
-resource "aws_iam_role" "lambda_role" {
-  name = "lambda_role"
+# Create an Elastic Beanstalk environment
+resource "aws_elastic_beanstalk_environment" "example_env" {
+  name                = "example-env"
+  application         = aws_elastic_beanstalk_application.example_app.name
+  solution_stack_name = "64bit Amazon Linux 2 v3.2.7 running Node.js 14"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
+  setting {
+    namespace = "aws:autoscaling:launchconfiguration"
+    name      = "InstanceType"
+    value     = "t2.micro"
+  }
+
+  tags = {
+    Name = "example-beanstalk-env"
+  }
 }
 
-# Attach a policy to the IAM role to allow Lambda to write logs to CloudWatch
-resource "aws_iam_role_policy_attachment" "lambda_policy_attachment" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
+# -------------------------------------
+# AWS Lambda
+# -------------------------------------
 
-# Create a Lambda function
+# Create a simple Lambda function
 resource "aws_lambda_function" "example_lambda" {
   function_name = "example_lambda_function"
-  role          = aws_iam_role.lambda_role.arn
   handler       = "index.handler"
   runtime       = "nodejs14.x"
   
@@ -92,21 +132,63 @@ resource "aws_lambda_function" "example_lambda" {
 
   source_code_hash = filebase64sha256("lambda_function.zip")
 
-  environment {
-    variables = {
-      BUCKET = aws_s3_bucket.example_bucket.bucket
-    }
+  tags = {
+    Name = "example-lambda-function"
   }
 }
 
-output "s3_bucket_name" {
-  value = aws_s3_bucket.example_bucket.bucket
+# -------------------------------------
+# Elastic Container Service (ECS)
+# -------------------------------------
+
+# Create an ECS cluster
+resource "aws_ecs_cluster" "example_ecs_cluster" {
+  name = "example-ecs-cluster"
+}
+
+# Create a Fargate task definition
+resource "aws_ecs_task_definition" "example_task" {
+  family                   = "example-task"
+  cpu                      = "256"
+  memory                   = "512"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+
+  container_definitions = jsonencode([
+    {
+      name  = "example-container"
+      image = "nginx"
+      essential = true
+      portMappings = [
+        {
+          containerPort = 80
+          hostPort      = 80
+        }
+      ]
+    }
+  ])
+}
+
+output "vpc_id" {
+  value = aws_vpc.example_vpc.id
+}
+
+output "subnet_id" {
+  value = aws_subnet.example_subnet.id
 }
 
 output "ec2_instance_public_ip" {
   value = aws_instance.example_ec2.public_ip
 }
 
+output "beanstalk_environment_url" {
+  value = aws_elastic_beanstalk_environment.example_env.endpoint_url
+}
+
 output "lambda_function_name" {
   value = aws_lambda_function.example_lambda.function_name
+}
+
+output "ecs_cluster_name" {
+  value = aws_ecs_cluster.example_ecs_cluster.name
 }
