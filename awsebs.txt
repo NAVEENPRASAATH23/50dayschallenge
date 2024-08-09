@@ -1,0 +1,169 @@
+provider "aws" {
+  region = "us-west-2"
+}
+
+# Create a VPC
+resource "aws_vpc" "example_vpc" {
+  cidr_block = "10.0.0.0/16"
+  tags = {
+    Name = "example-vpc"
+  }
+}
+
+# Create public and private subnets
+resource "aws_subnet" "public_subnet" {
+  vpc_id            = aws_vpc.example_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-west-2a"
+  map_public_ip_on_launch = true
+  tags = {
+    Name = "public-subnet"
+  }
+}
+
+resource "aws_subnet" "private_subnet" {
+  vpc_id            = aws_vpc.example_vpc.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "us-west-2a"
+  tags = {
+    Name = "private-subnet"
+  }
+}
+
+# Create an Internet Gateway
+resource "aws_internet_gateway" "example_igw" {
+  vpc_id = aws_vpc.example_vpc.id
+  tags = {
+    Name = "example-igw"
+  }
+}
+
+# Create a route table for the public subnet
+resource "aws_route_table" "public_route_table" {
+  vpc_id = aws_vpc.example_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.example_igw.id
+  }
+
+  tags = {
+    Name = "public-route-table"
+  }
+}
+
+# Associate the route table with the public subnet
+resource "aws_route_table_association" "public_route_table_assoc" {
+  subnet_id      = aws_subnet.public_subnet.id
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+# Create a security group for Elastic Beanstalk
+resource "aws_security_group" "eb_sg" {
+  vpc_id = aws_vpc.example_vpc.id
+  name   = "eb-sg"
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "eb-sg"
+  }
+}
+
+# Create an Elastic Beanstalk application
+resource "aws_elastic_beanstalk_application" "example_app" {
+  name = "example-app"
+}
+
+# Create an Elastic Beanstalk environment
+resource "aws_elastic_beanstalk_environment" "example_env" {
+  name                = "example-env"
+  application         = aws_elastic_beanstalk_application.example_app.name
+  solution_stack_name = "64bit Amazon Linux 2 v3.2.7 running Node.js 14"
+
+  setting {
+    namespace = "aws:autoscaling:launchconfiguration"
+    name      = "InstanceType"
+    value     = "t2.micro"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:launchconfiguration"
+    name      = "SecurityGroups"
+    value     = aws_security_group.eb_sg.id
+  }
+
+  setting {
+    namespace = "aws:ec2:vpc"
+    name      = "VPCId"
+    value     = aws_vpc.example_vpc.id
+  }
+
+  setting {
+    namespace = "aws:ec2:vpc"
+    name      = "Subnets"
+    value     = aws_subnet.public_subnet.id
+  }
+
+  setting {
+    namespace = "aws:elasticbeanstalk:environment"
+    name      = "ServiceRole"
+    value     = "arn:aws:iam::123456789012:role/aws-elasticbeanstalk-service-role"
+  }
+
+  tags = {
+    Name = "example-beanstalk-env"
+  }
+}
+
+# Create an S3 bucket for Elastic Beanstalk
+resource "aws_s3_bucket" "eb_bucket" {
+  bucket = "example-eb-bucket"
+  tags = {
+    Name = "example-eb-bucket"
+  }
+}
+
+# Create an SNS topic for Elastic Beanstalk notifications
+resource "aws_sns_topic" "eb_sns_topic" {
+  name = "example-eb-sns-topic"
+}
+
+output "vpc_id" {
+  value = aws_vpc.example_vpc.id
+}
+
+output "public_subnet_id" {
+  value = aws_subnet.public_subnet.id
+}
+
+output "eb_environment_url" {
+  value = aws_elastic_beanstalk_environment.example_env.endpoint_url
+}
+
+output "s3_bucket_name" {
+  value = aws_s3_bucket.eb_bucket.bucket
+}
+
+output "sns_topic_arn" {
+  value = aws_sns_topic.eb_sns_topic.arn
+}
